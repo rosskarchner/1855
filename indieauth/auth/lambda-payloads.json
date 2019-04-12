@@ -1,0 +1,38 @@
+{
+    "AuthEndpointFunction": {
+        "apigateway": {
+            "path": "/auth",
+            "method": {
+                "value": "GET",
+                "items": [
+                    "GET"
+                ]
+            },
+            "queryString": "?client_id=foo"
+        }
+    },
+    "CallbackEndpointFunction": {
+        "apigateway": {
+            "path": "/auth",
+            "method": {
+                "value": "GET",
+                "items": [
+                    "GET"
+                ]
+            },
+            "queryString": "?client_id=foo"
+        }
+    },
+    "AuthCodeCheckFunction": {
+        "apigateway": {
+            "path": "/auth",
+            "method": {
+                "value": "GET",
+                "items": [
+                    "GET"
+                ]
+            },
+            "queryString": "?client_id=foo"
+        }
+    }
+}
