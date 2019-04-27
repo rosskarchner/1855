@@ -1,0 +1,28 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  publisher
+
+  Sample SAM Template for publisher
+
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+  BlogGenFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: publisher/
+      Handler: app.lambda_handler
+      Runtime: python3.6
+      Events:
+        ReIndexBlog:
+          Type: S3
+          Properties:
+            Bucket: blogdev-karchner #!Ref SrcBucket
+            Events: s3:ObjectCreated:*
+            
+            
+#  BlogStorageBucket:
+#    Type: AWS::S3::Bucket 

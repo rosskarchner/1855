@@ -1,59 +1,152 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
-Description: >
+Transform: 'AWS::Serverless-2016-10-31'
+Description: |
   indieauth
-
   Sample SAM Template for indieauth
-
-# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
 Globals:
   Function:
     Timeout: 3
-
 Resources:
+  IndieAuthCMK:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      KeyPolicy:
+        Id: DefaultKmsPolicy
+        Version: '2012-10-17'
+        Statement:
+        - Sid: Enable IAM User Permissions
+          Effect: Allow
+          Principal:
+            AWS:
+            - Fn::Join:
+              - ":"
+              - - 'arn:aws:iam:'
+                - Ref: AWS::AccountId
+                - root
+          Action: kms:*
+          Resource: "*"
+        - Sid: Allow access for Key Administrators
+          Effect: Allow
+          Principal:
+            AWS:
+            - Fn::Join:
+              - ":"
+              - - 'arn:aws:iam:'
+                - Ref: AWS::AccountId
+                - Ref: AdministratorPrincipal
+          Action:
+          - kms:Create*
+          - kms:Describe*
+          - kms:Enable*
+          - kms:List*
+          - kms:Put*
+          - kms:Update*
+          - kms:Revoke*
+          - kms:Disable*
+          - kms:Get*
+          - kms:Delete*
+          - kms:ScheduleKeyDeletion
+          - kms:CancelKeyDeletion
+          Resource: "*"
+        - Sid: Allow use of the key
+          Effect: Allow
+          Principal:
+            AWS:
+            - Fn::Join:
+              - ":"
+              - - 'arn:aws:iam:'
+                - Ref: AWS::AccountId
+                - Ref: UserPrincipal
+          Action:
+          - kms:Encrypt
+          - kms:Decrypt
+          - kms:ReEncrypt*
+          - kms:GenerateDataKey*
+          - kms:DescribeKey
+          Resource: "*"
+        - Sid: Allow attachment of persistent resources
+          Effect: Allow
+          Principal:
+            AWS:
+            - Fn::Join:
+              - ":"
+              - - 'arn:aws:iam:'
+                - Ref: AWS::AccountId
+                - Ref: UserPrincipal
+          Action:
+          - kms:CreateGrant
+          - kms:ListGrants
+          - kms:RevokeGrant
+          Resource: "*"
+          Condition:
+            Bool:
+              kms:GrantIsForAWSResource: true
+        - Sid: Allow decrypting of any value encrypted under this key.
+          Effect: Allow
+          Principal:
+            AWS:
+            - Fn::GetAtt:
+              - DecryptAnythingRole
+              - Arn
+          Action:
+          - kms:Decrypt
+          Resource: "*"
+        - Sid: Allow encrypting under this key.
+          Effect: Allow
+          Principal:
+            AWS:
+            - Fn::GetAtt:
+              - EncryptAnythingRole
+              - Arn
+          Action:
+          - kms:Encrypt
+          - kms:GenerateDataKey
+          Resource: "*"
   AuthEndpointFunction:
-    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Type: 'AWS::Serverless::Function'
     Properties:
       CodeUri: auth/
       Handler: app.auth_handler
       Runtime: python3.6
       Events:
         AuthEndpointGET:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Type: Api
           Properties:
             Path: /auth
             Method: get
+      Description: ''
   CallbackEndpointFunction:
-    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Type: 'AWS::Serverless::Function'
     Properties:
       CodeUri: auth/
       Handler: app.callback_handler
       Runtime: python3.6
       Events:
         CallbackEndpointGET:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Type: Api
           Properties:
             Path: /callback
             Method: get
   AuthCodeCheckFunction:
-    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Type: 'AWS::Serverless::Function'
     Properties:
       CodeUri: auth/
       Handler: app.auth_code_check
       Runtime: python3.6
       Events:
         AuthEndpointPOST:
-          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Type: Api
           Properties:
             Path: /auth
             Method: post
 Outputs:
-  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
-  # Find out more about other implicit resources you can reference within SAM
-  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
   AuthEndpoint:
-    Description: "API Gateway endpoint URL for Prod auth endpoint"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/auth"
+    Description: API Gateway endpoint URL for Prod auth endpoint
+    Value:
+      'Fn::Sub': >-
+        https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/auth
   CallbackEndpoint:
-    Description: "API Gateway endpoint URL for Prod callback endpoint"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/callback"
+    Description: API Gateway endpoint URL for Prod callback endpoint
+    Value:
+      'Fn::Sub': >-
+        https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/callback
