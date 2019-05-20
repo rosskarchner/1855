@@ -1,36 +1,45 @@
 from datetime import datetime, timedelta
-import json
+import json, os, secrets
 from urllib.parse import urlencode, parse_qs, urljoin
 
 import jwt
 import requests
 
+from tokens import authorization_state_token
 
+COGNITO_BASE_URL = os.environ['UserPoolURL']
+def cognito_url(path):
+    return urljoin(COGNITO_BASE_URL,path)
+    
 def auth_handler(event, context):
     """ this is the incoming request from an indieauth client. 
-    Stash the incoming query parameters to S3, and redirect
-    to the Cognito login UI"""
+    Stash the incoming query parameters into a JWT, and redirect
+    to the Cognito login UI using that JWT as the "state" paramteter
+    """
     
-    incoming_params = event['queryStringParameters'].copy()
+    state_token = authorization_state_token(event['queryStringParameters'])
     
-    if ('response_code' in incoming_params 
-        and incoming_params['response_code'] == 'code'):
-         if 'scope' not in incoming_params:
-             incoming_params['scope'] = 'create update delete media'
+    #incoming_params = event['queryStringParameters'].copy()
+    
+    #if ('response_code' in incoming_params 
+    #    and incoming_params['response_code'] == 'code'):
+    #     if 'scope' not in incoming_params:
+    #         incoming_params['scope'] = 'create update delete media'
             
-    state_token = jwt.encode(incoming_params, 'secret', algorithm='HS256') 
-    upstream_endpoint = 'https://micropub.auth.us-east-1.amazoncognito.com/oauth2/authorize'
-    upstream_params = {}
-    upstream_params['client_id'] = '6vpoev0qmo534hfo99snhj1nvd'
-    upstream_params['response_type'] = 'code' 
-    upstream_params['redirect_uri'] = 'https://ncelo6wzf5.execute-api.us-east-1.amazonaws.com/Prod/callback'
-    upstream_params['state'] = state_token
-    
+    #state_token = jwt.encode(incoming_params, 'secret', algorithm='HS256') 
+    #upstream_endpoint = cognito_url('/oauth2/authorize')
+    #upstream_params = {}
+    #upstream_params['client_id'] = '6vpoev0qmo534hfo99snhj1nvd'
+    #upstream_params['response_type'] = 'code' 
+    #upstream_params['redirect_uri'] = 'https://ncelo6wzf5.execute-api.us-east-1.amazonaws.com/Prod/callback'
+    #upstream_params['state'] = state_token
+    #print(os.environ)    
     return {
-        "statusCode": 302,
-        "headers": {
-                        'Location': upstream_endpoint + '?' + urlencode(upstream_params)
-                    }
+        "statusCode": 200,
+        #"headers": {
+        #                'Location': upstream_endpoint + '?' + urlencode(upstream_params)
+        #            }
+        "body": state_token.decode('utf-8')
     }
     
     
