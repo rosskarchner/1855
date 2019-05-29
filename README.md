@@ -1,6 +1,6 @@
 # 1855
 
-1855 will be a collection of serverless implementations of Indieweb standards like [micropub](https://indieweb.org/Micropub), [indieauth](https://indieweb.org/IndieAuth), [webmention](https://indieweb.org/Webmention) and others. 
+1855 will be an integrated collection of serverless implementations of Indieweb standards like [micropub](https://indieweb.org/Micropub), [indieauth](https://indieweb.org/IndieAuth), [webmention](https://indieweb.org/Webmention) and others, running on AWS.
 
 Current status: indieauth is getting pretty close.
 
