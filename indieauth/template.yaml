@@ -3,6 +3,13 @@ Transform: 'AWS::Serverless-2016-10-31'
 Description: |
   indieauth
   Sample SAM Template for indieauth
+Parameters:
+  HostedZoneName:
+    Type: String
+  CognitoSubdomain:
+    Type: String
+  CertificateArn:
+    Type: String
 Globals:
   Function:
     Timeout: 3
@@ -12,10 +19,11 @@ Globals:
           Ref: IndieAuthCMK
         UserPoolID:
           Ref: UserPool
-        UserPoolURL:
-          'Fn::GetAtt':
-            - UserPool
-            - ProviderURL
+        UserPoolURL: !Sub "https://${CognitoSubdomain}.${HostedZoneName}"
+        UserPoolClientID:
+          Ref: IndieAuthClient
+        StackID:
+          Ref: 'AWS::StackId'
 Resources:
   IndieAuthCMK:
     Type: 'AWS::KMS::Key'
@@ -33,25 +41,14 @@ Resources:
                     - - 'arn:aws:iam:'
                       - Ref: 'AWS::AccountId'
                       - root
-                - '*'
             Action: 'kms:*'
             Resource: '*'
-          - Sid: Allow decrypting of any value encrypted under this key.
+          - Sid: Allow Auth Endpoint to encrypt
             Effect: Allow
             Principal:
               AWS:
                 - 'Fn::GetAtt':
-                    - DecryptAnythingRole
-                    - Arn
-            Action:
-              - 'kms:Decrypt'
-            Resource: '*'
-          - Sid: Allow encrypting under this key.
-            Effect: Allow
-            Principal:
-              AWS:
-                - 'Fn::GetAtt':
-                    - EncryptAnythingRole
+                    - AuthEndpointFunctionRole
                     - Arn
             Action:
               - 'kms:Encrypt'
@@ -84,6 +81,19 @@ Resources:
             Path: /auth
             Method: get
       Description: ''
+      MemorySize: 128
+      Policies:
+        - CloudFormationDescribeStacksPolicy:
+            Description: Gives permission to describe CloudFormation stacks
+            Parameters: {}
+            Definition:
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - 'cloudformation:DescribeStacks'
+                  Resource:
+                    'Fn::Sub': >-
+                      arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackId}
   CallbackEndpointFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -108,38 +118,109 @@ Resources:
           Properties:
             Path: /auth
             Method: post
-  DecryptAnythingRole:
-    Type: 'AWS::IAM::Role'
-    Metadata:
-      Comment: >-
-        DecryptAnythingRole permits decryption of values encrypted under a KMS
-        key without any restrictions.
+  UserPoolDomainFunction:
+    Type: 'AWS::Serverless::Function'
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - ec2.amazonaws.com
-            Action:
-              - 'sts:AssumeRole'
-  EncryptAnythingRole:
-    Type: 'AWS::IAM::Role'
-    Metadata:
-      Comment: >-
-        EncryptAnythingRole permits encryption of values under a KMS key without
-        any restrictions.
+      CodeUri: userpool_custom_resources/
+      Handler: customresources.handle_user_pool_custom_domain
+      Runtime: python3.6
+      Description: ''
+      MemorySize: 128
+      Timeout: 300
+      Policies:
+        - Statement:
+          - Action: [
+                  "cloudfront:UpdateDistribution",
+              ]
+            Effect: Allow
+            # this is too broad, but I don't see a way to deterimine the 
+            # cloudfront distribution ID ahead of time
+            Resource: '*'
+        - Statement:
+          - Action: [
+                  "cognito-idp:DeleteUserPoolDomain",
+                  "cognito-idp:CreateUserPoolDomain",
+                  "cognito-idp:DescribeUserPoolDomain",
+                  "cognito-idp:UpdateUserPoolDomain"
+              ]
+            Effect: Allow
+            Resource: !GetAtt UserPool.Arn
+        - Statement:
+          - Action: [
+                  "cognito-idp:UpdateUserPoolDomain",
+                  "cognito-idp:DescribeUserPoolDomain"
+              ]
+            Effect: Allow
+            # Some operations seem to require '*' access to
+            # UpdateUserPoolDomain. Maybe a bug?
+            Resource: '*'
+  UserPoolDomainConfig:
+    Type: 'Custom::CustomResource'
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - ec2.amazonaws.com
-            Action:
-              - 'sts:AssumeRole'
+      ServiceToken:
+        'Fn::GetAtt':
+          - UserPoolDomainFunction
+          - Arn
+      UserPoolId:
+        Ref: UserPool
+      Domain: !Sub "${CognitoSubdomain}.${HostedZoneName}"
+      CustomDomainConfig: 
+        CertificateArn: !Ref CertificateArn
+    DependsOn:
+      - CallbackEndpointFunction
+      - IndieAuthClient
+      - UserPool
+  UserPoolDomainRecordSet:
+    Type: 'AWS::Route53::RecordSet'
+    Properties:
+      AliasTarget:
+        DNSName: !GetAtt UserPoolDomainConfig.CloudFrontDomain
+        HostedZoneId: Z2FDTNDATAQYW2
+      Name: !Sub "${CognitoSubdomain}.${HostedZoneName}"
+      HostedZoneName: !Sub "${HostedZoneName}."
+      Type: A
+  UserPoolClientConfigurationFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      CodeUri: userpool_custom_resources/
+      Handler: customresources.handle_client_config
+      Runtime: python3.6
+      Description: ''
+      MemorySize: 128
+      Timeout: 300
+      Policies:
+        - Statement:
+          - Action: [
+                  "cognito-idp:UpdateUserPoolClient",
+                  "cognito-idp:DescribeUserPoolClient"
+              ]
+            Effect: Allow
+            Resource: !GetAtt UserPool.Arn
+  UserPoolClientAdditionalConfig:
+    Type: 'Custom::CustomResource'
+    Properties:
+      ServiceToken:
+        'Fn::GetAtt':
+          - UserPoolClientConfigurationFunction
+          - Arn
+      UserPool:
+        Ref: UserPool
+      UserPoolClient:
+        Ref: IndieAuthClient
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs:
+        - 'Fn::Sub': >-
+            https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/callback
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+    DependsOn:
+      - CallbackEndpointFunction
+      - IndieAuthClient
+      - UserPool
 Outputs:
   AuthEndpoint:
     Description: API Gateway endpoint URL for Prod auth endpoint
