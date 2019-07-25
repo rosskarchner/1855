@@ -4,25 +4,247 @@ Description: >
   publisher
 
   Sample SAM Template for publisher
-
+Parameters:
+  DomainName:
+    Type: String
+  BlogName:
+    Type: String
+  BlogDescription:
+    Type: String
+  AuthEndpointURL:
+    Type: String
+  TokenEndpointURL:
+    Type: String
+  RelMeLinks:
+    Type: CommaDelimitedList
+  CertificateArn:
+    Type: String
 Globals:
   Function:
     Timeout: 3
-
 Resources:
-  BlogGenFunction:
-    Type: AWS::Serverless::Function
+  SiteBucket:
+    Type: AWS::S3::Bucket
     Properties:
-      CodeUri: publisher/
+      # Work-around circular dependencies
+      # https://github.com/awslabs/serverless-application-model/issues/138
+      # this seemed like the best way to get the stack UUID
+      # the stack name is easier to get, but stack names can have uppercase
+      # characters, while bucket names can not.
+      BucketName: 
+        "Fn::Sub":
+        - "blog-${domainnodots}"
+        - "domainnodots": 
+            "Fn::Join":
+              - "-"
+              - "Fn::Split":
+                - '.'
+                -  "Ref": DomainName
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        ErrorDocument: error.html
+        IndexDocument: index.html
+  SiteBucketConfigChangeWatcher:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      CodeUri: BlogConfigChangeWatcher/
+      Handler: app.lambda_handler
+      Runtime: python3.6
+      Environment:
+        Variables:
+          STATEMACHINE_ARN: !Ref ConfigChangeStateMachine
+      Policies:
+        - Statement:
+            - Action:
+                - 's3:GetObject'
+              Effect: Allow
+              Resource:
+                "Fn::Sub": 
+                  - "arn:aws:s3:::${BucketName}*"
+                  - BucketName: 
+                      "Fn::Sub":
+                      - "blog-${domainnodots}"
+                      - "domainnodots": 
+                          "Fn::Join":
+                            - "-"
+                            - "Fn::Split":
+                              - '.'
+                              -  "Ref": DomainName
+#        - Statement:
+#            - Action:
+#                - 'statemachine:StartExecution'
+#              Effect: Allow
+#              Resource: !Ref ConfigChangeStateMachine
+      Events:
+        ConfigChange:
+          Type: S3
+          Properties:
+            Bucket: !Ref SiteBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: _config/
+  SiteCDN:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !Ref DomainName
+        IPV6Enabled: true
+        Enabled: true
+        DefaultCacheBehavior:
+          AllowedMethods: ['GET', 'HEAD']
+          CachedMethods: ['GET', 'HEAD']
+          Compress: true
+          DefaultTTL: 31536000
+          TargetOriginId: SiteBucketOrigin
+          ForwardedValues:
+            QueryString: false
+          ViewerProtocolPolicy: allow-all
+        ViewerCertificate:
+           AcmCertificateArn: !Ref CertificateArn
+           SslSupportMethod: sni-only
+        Origins:
+          - DomainName: !Select [2, !Split ["/", !GetAtt SiteBucket.WebsiteURL]]
+            Id: SiteBucketOrigin
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+  EntriesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      KeySchema: 
+        - AttributeName: "URL"
+          KeyType: "HASH"
+      AttributeDefinitions:
+        - AttributeName: "URL"
+          AttributeType: "S"
+        - AttributeName: "pubdate"
+          AttributeType: "N"
+        - AttributeName: "page"
+          AttributeType: "N"
+      GlobalSecondaryIndexes:
+        - IndexName: "Pager"
+          KeySchema: 
+            - AttributeName: "page"
+              KeyType: "HASH"
+            - AttributeName: "pubdate"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes:
+            - mf2_json
+      BillingMode: PAY_PER_REQUEST
+  MicropubAPI:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      CodeUri: micropub/
       Handler: app.lambda_handler
       Runtime: python3.6
       Events:
-        ReIndexBlog:
-          Type: S3
+        AuthEndpointGET:
+          Type: Api
           Properties:
-            Bucket: blogdev-karchner #!Ref SrcBucket
-            Events: s3:ObjectCreated:*
-            
-            
-#  BlogStorageBucket:
-#    Type: AWS::S3::Bucket 
+            Path: '/micropub'
+            Method: post
+      Description: ''
+      MemorySize: 128
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+           - Effect: Allow
+             Action:
+               - dynamodb:PutItem
+             Resource: !GetAtt EntriesTable.Arn
+  RenderHfeedFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      CodeUri: BlogRenderers/
+      Handler: app.render_hfeed_page
+      Runtime: python3.6
+      MemorySize: 128
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref SiteBucket
+      Policies:
+        - Statement:
+            - Action:
+                - 's3:GetObject'
+                - 's3:PutObject'
+                - 's3:PutObjectAcl'
+              Effect: Allow
+              Resource: !Join ['', [!GetAtt SiteBucket.Arn, '*']]
+  BlogConfigFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      CodeUri: BlogConfigCustomResource/
+      Handler: blog_config.lambda_handler
+      Runtime: python3.6
+      Description: ''
+      MemorySize: 128
+      Timeout: 300
+      AutoPublishAlias: live # see inclusion of FunctionVersion in BlogConfig below
+      Policies:
+        - Statement:
+            - Action:
+                - 's3:GetObject'
+                - 's3:PutObject'
+              Effect: Allow
+              Resource: !Join ['', [!GetAtt SiteBucket.Arn, '/_config/*']]
+  BlogConfig:
+    Type: 'Custom::CustomResource'
+    Properties:
+      ServiceToken:
+        'Fn::GetAtt':
+          - BlogConfigFunction
+          - Arn
+      DomainName: !Ref DomainName
+      BlogName: !Ref BlogName
+      BlogDescription: !Ref BlogDescription
+      AuthEndpointURL: !Ref AuthEndpointURL
+      TokenEndpointURL: !Ref TokenEndpointURL
+      RelMeLinks: !Ref RelMeLinks
+      S3Bucket: !Ref SiteBucket
+      FunctionVersion: !Ref BlogConfigFunction.Version # hopefully this forces an update whenever the function changes
+      MicropubEndpointURL: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/micropub"
+  StepFunctionExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - !Sub states.${AWS::Region}.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: StatesExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource: "*" # TODO: tighten this up
+  ConfigChangeStateMachine:
+    Type: "AWS::StepFunctions::StateMachine"
+    Properties:
+      DefinitionString:
+        !Sub
+          - |-
+            {
+              "Comment": "A Hello World example using an AWS Lambda function",
+              "StartAt": "HelloWorld",
+              "States": {
+                "HelloWorld": {
+                  "Type": "Task",
+                  "Resource": "${lambdaArn}",
+                  "End": true
+                }
+              }
+            }
+          - {lambdaArn: !GetAtt [ RenderHfeedFunction, Arn ]}
+      RoleArn: !GetAtt [ StepFunctionExecutionRole, Arn ]

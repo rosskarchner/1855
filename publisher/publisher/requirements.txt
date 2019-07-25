@@ -1,4 +1,0 @@
-requests
-boto3
-jinja2
-mf2py

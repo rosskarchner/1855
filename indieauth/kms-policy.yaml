@@ -1,0 +1,36 @@
+Id: DefaultKmsPolicy
+Version: '2012-10-17'
+Statement:
+  - Sid: Enable IAM User Permissions
+    Effect: Allow
+    Principal:
+      AWS:
+        - 'Fn::Join':
+            - ':'
+            - - 'arn:aws:iam:'
+              - Ref: 'AWS::AccountId'
+              - root
+        - "*"
+    Action: 'kms:*'
+    Resource: '*'
+  - Sid: Allow decrypting of any value encrypted under this key.
+    Effect: Allow
+    Principal:
+      AWS:
+        - 'Fn::GetAtt':
+            - DecryptAnythingRole
+            - Arn
+    Action:
+      - 'kms:Decrypt'
+    Resource: '*'
+  - Sid: Allow encrypting under this key.
+    Effect: Allow
+    Principal:
+      AWS:
+        - 'Fn::GetAtt':
+            - EncryptAnythingRole
+            - Arn
+    Action:
+      - 'kms:Encrypt'
+      - 'kms:GenerateDataKey'
+    Resource: '*'

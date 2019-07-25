@@ -10,20 +10,18 @@ Parameters:
     Type: String
   CertificateArn:
     Type: String
+  EmailSender:
+    Type: String
 Globals:
   Function:
     Timeout: 3
     Environment:
       Variables:
-        CMK:
-          Ref: IndieAuthCMK
+
         UserPoolID:
           Ref: UserPool
-        UserPoolURL: !Sub "https://${CognitoSubdomain}.${HostedZoneName}"
         UserPoolClientID:
           Ref: IndieAuthClient
-        StackID:
-          Ref: 'AWS::StackId'
 Resources:
   IndieAuthCMK:
     Type: 'AWS::KMS::Key'
@@ -54,6 +52,17 @@ Resources:
               - 'kms:Encrypt'
               - 'kms:GenerateDataKey'
             Resource: '*'
+          - Sid: Allow confirmation GET view to decrypt
+            Effect: Allow
+            Principal:
+              AWS:
+                - 'Fn::GetAtt':
+                    - ConfirmationEndpointFunction
+                    - Arn
+            Action:
+              - 'kms:Encrypt'
+              - 'kms:GenerateDataKey'
+            Resource: '*'
   IndieAuthCMKAlias:
     Type: 'AWS::KMS::Alias'
     Properties:
@@ -62,6 +71,15 @@ Resources:
         Ref: IndieAuthCMK
   UserPool:
     Type: 'AWS::Cognito::UserPool'
+    Properties:
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      UsernameAttributes:
+        - email
+      EmailConfiguration:
+        EmailSendingAccount: DEVELOPER
+        SourceArn:
+          'Fn::Sub': 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailSender}'
   IndieAuthClient:
     Type: 'AWS::Cognito::UserPoolClient'
     Properties:
@@ -78,7 +96,7 @@ Resources:
         AuthEndpointGET:
           Type: Api
           Properties:
-            Path: /auth
+            Path: '/{subscriber_id}/auth'
             Method: get
       Description: ''
       MemorySize: 128
@@ -93,19 +111,33 @@ Resources:
                     - 'cloudformation:DescribeStacks'
                   Resource:
                     'Fn::Sub': >-
-                      arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackId}
-  CallbackEndpointFunction:
+                      arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackId}      
+      Environment:
+        Variables:
+          UserPoolURL: !Sub "https://${CognitoSubdomain}.${HostedZoneName}"
+          UserPoolClientID:
+            Ref: IndieAuthClient
+          StackID:
+            Ref: 'AWS::StackId'
+          CMK:
+            Ref: IndieAuthCMK
+    DependsOn: ConfirmationEndpointFunction
+  ConfirmationEndpointFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
-      CodeUri: auth/
-      Handler: app.callback_handler
+      CodeUri: confirmation/
+      Handler: app.lambda_handler
       Runtime: python3.6
       Events:
-        CallbackEndpointGET:
+        ConfirmationEndpointGET:
           Type: Api
           Properties:
-            Path: /callback
+            Path: /confirm
             Method: get
+      Environment:
+        Variables:
+          CMK:
+            Ref: IndieAuthCMK
   AuthCodeCheckFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -129,31 +161,27 @@ Resources:
       Timeout: 300
       Policies:
         - Statement:
-          - Action: [
-                  "cloudfront:UpdateDistribution",
-              ]
-            Effect: Allow
-            # this is too broad, but I don't see a way to deterimine the 
-            # cloudfront distribution ID ahead of time
-            Resource: '*'
+            - Action:
+                - 'cloudfront:UpdateDistribution'
+              Effect: Allow
+              Resource: '*'
         - Statement:
-          - Action: [
-                  "cognito-idp:DeleteUserPoolDomain",
-                  "cognito-idp:CreateUserPoolDomain",
-                  "cognito-idp:DescribeUserPoolDomain",
-                  "cognito-idp:UpdateUserPoolDomain"
-              ]
-            Effect: Allow
-            Resource: !GetAtt UserPool.Arn
+            - Action:
+                - 'cognito-idp:DeleteUserPoolDomain'
+                - 'cognito-idp:CreateUserPoolDomain'
+                - 'cognito-idp:DescribeUserPoolDomain'
+                - 'cognito-idp:UpdateUserPoolDomain'
+              Effect: Allow
+              Resource:
+                'Fn::GetAtt':
+                  - UserPool
+                  - Arn
         - Statement:
-          - Action: [
-                  "cognito-idp:UpdateUserPoolDomain",
-                  "cognito-idp:DescribeUserPoolDomain"
-              ]
-            Effect: Allow
-            # Some operations seem to require '*' access to
-            # UpdateUserPoolDomain. Maybe a bug?
-            Resource: '*'
+            - Action:
+                - 'cognito-idp:UpdateUserPoolDomain'
+                - 'cognito-idp:DescribeUserPoolDomain'
+              Effect: Allow
+              Resource: '*'
   UserPoolDomainConfig:
     Type: 'Custom::CustomResource'
     Properties:
@@ -163,21 +191,27 @@ Resources:
           - Arn
       UserPoolId:
         Ref: UserPool
-      Domain: !Sub "${CognitoSubdomain}.${HostedZoneName}"
-      CustomDomainConfig: 
-        CertificateArn: !Ref CertificateArn
+      Domain:
+        'Fn::Sub': '${CognitoSubdomain}.${HostedZoneName}'
+      CustomDomainConfig:
+        CertificateArn:
+          Ref: CertificateArn
     DependsOn:
-      - CallbackEndpointFunction
       - IndieAuthClient
       - UserPool
   UserPoolDomainRecordSet:
     Type: 'AWS::Route53::RecordSet'
     Properties:
       AliasTarget:
-        DNSName: !GetAtt UserPoolDomainConfig.CloudFrontDomain
+        DNSName:
+          'Fn::GetAtt':
+            - UserPoolDomainConfig
+            - CloudFrontDomain
         HostedZoneId: Z2FDTNDATAQYW2
-      Name: !Sub "${CognitoSubdomain}.${HostedZoneName}"
-      HostedZoneName: !Sub "${HostedZoneName}."
+      Name:
+        'Fn::Sub': '${CognitoSubdomain}.${HostedZoneName}'
+      HostedZoneName:
+        'Fn::Sub': '${HostedZoneName}.'
       Type: A
   UserPoolClientConfigurationFunction:
     Type: 'AWS::Serverless::Function'
@@ -190,12 +224,14 @@ Resources:
       Timeout: 300
       Policies:
         - Statement:
-          - Action: [
-                  "cognito-idp:UpdateUserPoolClient",
-                  "cognito-idp:DescribeUserPoolClient"
-              ]
-            Effect: Allow
-            Resource: !GetAtt UserPool.Arn
+            - Action:
+                - 'cognito-idp:UpdateUserPoolClient'
+                - 'cognito-idp:DescribeUserPoolClient'
+              Effect: Allow
+              Resource:
+                'Fn::GetAtt':
+                  - UserPool
+                  - Arn
   UserPoolClientAdditionalConfig:
     Type: 'Custom::CustomResource'
     Properties:
@@ -211,16 +247,14 @@ Resources:
         - COGNITO
       CallbackURLs:
         - 'Fn::Sub': >-
-            https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/callback
+            https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/confirm
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows:
         - code
       AllowedOAuthScopes:
         - openid
     DependsOn:
-      - CallbackEndpointFunction
-      - IndieAuthClient
-      - UserPool
+      - ConfirmationEndpointFunction
 Outputs:
   AuthEndpoint:
     Description: API Gateway endpoint URL for Prod auth endpoint
@@ -231,4 +265,4 @@ Outputs:
     Description: API Gateway endpoint URL for Prod callback endpoint
     Value:
       'Fn::Sub': >-
-        https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/callback
+        https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/confirm

@@ -55,6 +55,7 @@ def handle_client_config(event, context, request_type):
     else:
         settings_clean["AllowedOAuthFlowsUserPoolClient"] = False
     LOGGER.info("ATTEMPTING TO CONFIGURE USER POOL CLIENT WITH:\n %s", settings_clean)
+    cognito.update_user_pool_client(**settings_clean)
     return {}
 
 

@@ -28,11 +28,6 @@ def authorization_state_token(request_params):
     print(CMK_ID)
     payload = clean_authorization_params(request_params)
     payload["aud"] = "upstream_oauth_state"
-    # "Otherwise, if no argument is provided, or if the argument is None,
-    # the token_* functions will use a reasonable default instead"
-    # https://docs.python.org/3/library/secrets.html#how-many-bytes-should-tokens-use
-    #
-    # I like the sound of that.
     signing_key = secrets.token_bytes()
     encrypted_key = kms_client.encrypt(KeyId=CMK_ID, Plaintext=signing_key)[
         "CiphertextBlob"
