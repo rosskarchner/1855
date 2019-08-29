@@ -1,2 +1,9 @@
 boto3
 mf2py
+requests
+multidict
+dataclasses
+sansio-multipart
+unicode-slugify
+pytz
+python-dateutil
