@@ -1,4 +1,6 @@
 #!/bin/sh
+set -e
+cfn-lint --cfn_file template.yaml
 isort -rc --atomic auth
 black -t py36 .
 sam build

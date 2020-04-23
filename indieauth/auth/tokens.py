@@ -3,7 +3,6 @@ import os
 import secrets
 
 import boto3
-
 import jwt
 
 CMK_ID = os.environ["CMK"]

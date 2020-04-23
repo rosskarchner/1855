@@ -15,7 +15,7 @@ from boto3.dynamodb.conditions import Key
 import multidict
 import sansio_multipart
 import slugify
-from auth import allowed_scopes
+from auth import TokenUser
 from normalize import normalize_micropub_post
 
 
@@ -25,15 +25,6 @@ class MicropubOperationType(Enum):
     DELETE = 3
     UNDELETE = 4
     MEDIA = 5
-
-
-ScopeForOperation = {
-    MicropubOperationType.CREATE: "create",
-    MicropubOperationType.UPDATE: "update",
-    MicropubOperationType.DELETE: "delete",
-    MicropubOperationType.UNDELETE: "create",  # seems correct to equate un-deletion with creation
-    MicropubOperationType.MEDIA: "media",
-}
 
 
 dynamodb = boto3.resource("dynamodb")
@@ -53,11 +44,13 @@ def micropub_get(event, context):
     }
 
 
-def save_document(operation, document):
+def create_document(operation, document):
     timezone = pytz.timezone(os.environ["TIMEZONE"])
     now_local = timezone.fromutc(datetime.utcnow())
     now_iso = now_local.isoformat()
 
+    # TODO: Create a persistent ID
+    # TODO: sortdate should be based on UTC
     # noise gets appended to sortdate just to avoid conflicts
     # (DynamoDB sort keys must be unqiue)
     # We'll also use it as a slug if there is no name
@@ -96,9 +89,6 @@ def save_document(operation, document):
 
     url = None
 
-    # too complicated? maybe?
-    # flaw: secondary indexes are eventually consistent
-    # then again, with extra_slug, collissions should be pretty darn rare
     while url == None:
         extra_slug = random.randint(1, 1000)
         speculative_url = "/%s/%s/%s-%s.html" % (
@@ -107,41 +97,36 @@ def save_document(operation, document):
             extra_slug,
             slug,
         )
-        matching_urls = EntriesTable.query(
-            IndexName="by_url", KeyConditionExpression=Key("url").eq(speculative_url)
-        )
-        if not matching_urls["Items"]:
+        existing_item = EntriesTable.get_item(Key={"url": speculative_url}).get("Item")
+        if not existing_item:
             url = speculative_url
 
     year_month = "%s%s" % (pubdate.year, str(pubdate.month).zfill(2))
     sortdate = now_iso + "&&" + noise
 
-    dynamo_item = {
-        "year_month": year_month,
-        "sortdate": sortdate,
-        "url": url,
-        "mf2_json": document,
-    }
+    dynamo_item = {"sortdate": sortdate, "url": url, "mf2_json": document}
 
     EntriesTable.put_item(Item=dynamo_item)
 
     return url
 
 
-def micropub_post(event, context):
-    print(json.dumps(event))
-    document, access_token, files = normalize_micropub_post(event)
-    users_scopes = allowed_scopes(access_token)
-
+def scope_required_for_document(document):
     if "action" in document and document["action"] in ["update", "delete", "undelete"]:
         operation = getattr(MicropubOperationType, document["action"].uppercase())
     elif "type" in document and "properties" and document["properties"]:
         operation = MicropubOperationType.CREATE
 
+
+def micropub_post(event, context):
+    print(json.dumps(event))
+    document, access_token, files = normalize_micropub_post(event)
+    users = TokenUser(access_token)
+
     required_scope = ScopeForOperation[operation]
 
     if required_scope in users_scopes:
-        url_path = save_document(operation, document)
+        url_path = create_document(operation, document)
         url = urljoin(os.environ["MeURL"], url_path)
         print(url)
 

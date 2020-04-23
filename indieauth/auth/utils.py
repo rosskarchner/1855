@@ -1,7 +1,6 @@
 import json
 
 import boto3
-
 import mf2py
 
 cloudformation = boto3.client("cloudformation")

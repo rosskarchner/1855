@@ -4,9 +4,8 @@ import secrets
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlencode, urljoin
 
-import requests
-
 import jwt
+import requests
 from tokens import authorization_state_token
 from utils import outputs_for_cloudformation_stack, validate_site_subscriber
 

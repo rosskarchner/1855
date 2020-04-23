@@ -118,29 +118,28 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       KeySchema: 
-        - AttributeName: "year_month"
+        - AttributeName: "url"
+          KeyType: "HASH"
+      AttributeDefinitions:
+        - AttributeName: "url"
+          AttributeType: "S"
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification: 
+         StreamViewType: NEW_AND_OLD_IMAGES
+  FeedDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      KeySchema:
+        - AttributeName: feedspec
           KeyType: "HASH"
         - AttributeName: "sortdate"
           KeyType: "RANGE"
       AttributeDefinitions:
-        - AttributeName: "url"
+        - AttributeName: "feedspec"
           AttributeType: "S"
         - AttributeName: "sortdate"
           AttributeType: "S"
-        - AttributeName: "year_month"
-          AttributeType: "S"
-      GlobalSecondaryIndexes:
-        - IndexName: "by_url"
-          KeySchema: 
-            - AttributeName: "url"
-              KeyType: "HASH"
-          Projection:
-            ProjectionType: INCLUDE
-            NonKeyAttributes:
-            - mf2_json
       BillingMode: PAY_PER_REQUEST
-      StreamSpecification: 
-         StreamViewType: NEW_AND_OLD_IMAGES
   EntryTableStreamWatcher:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -191,16 +190,8 @@ Resources:
            - Effect: Allow
              Action:
                - dynamodb:PutItem
+               - dynamodb:GetItem
              Resource: !GetAtt EntriesTable.Arn
-        - Version: '2012-10-17'
-          Statement:
-           - Effect: Allow
-             Action:
-               - dynamodb:Query
-             Resource:
-               Fn::Sub:
-                 -  "${tablearn}/index/by_url"
-                 - tablearn: !GetAtt EntriesTable.Arn
   RenderHfeedFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
